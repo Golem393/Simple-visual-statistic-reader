@@ -20,10 +20,52 @@ def extract_with_lasers_v6(image_path):
     target_height = int(target_width * img.shape[0] / img.shape[1])
     img = cv2.resize(img, (target_width, target_height))
 
-    # --- 1. ROI & THRESHOLDING ---
-    roi_y1, roi_y2 = 100, 325
-    roi_x1, roi_x2 = 225, 575
+    # --- 1. AUTOMATIC SCREEN DETECTION (Color/Brightness Based) ---
+    # Convert to HSV to target the bright bluish-white backlight
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Define range for the light blue/white LCD backlight
+    # Hue: ~90-130 (Blueish), Sat: 0-100 (Pale/Whiteish), Val: 150-255 (Bright)
+    lower_blue_light = np.array([90, 0, 150])
+    upper_blue_light = np.array([130, 100, 255])
+    
+    mask = cv2.inRange(hsv, lower_blue_light, upper_blue_light)
+    cv2.imwrite(f"{debug_dir}/0a_HSV_Mask.png", mask) # Debug the color mask
+    
+    # Clean up the mask (remove small noise, fill holes)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    
+    # Find the largest contour in the illuminated area
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    screen_contour = None
+    if contours:
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        # Verify it's actually a large screen area (e.g., > 5% of total image)
+        if cv2.contourArea(contours[0]) > (img.shape[0] * img.shape[1] * 0.05):
+            screen_contour = contours[0]
+
+    if screen_contour is not None:
+        x, y, w, h = cv2.boundingRect(screen_contour)
+        pad = 8 # Slightly larger inset to avoid the dark inner bezel shadows
+        roi_y1, roi_y2 = max(0, y + pad), min(img.shape[0], y + h - pad)
+        roi_x1, roi_x2 = max(0, x + pad), min(img.shape[1], x + w - pad)
+    else:
+        print("WARNING: Screen color detection failed. Using hardcoded fallback.")
+        roi_y1, roi_y2 = 100, 325
+        roi_x1, roi_x2 = 225, 575
+
     roi = img[roi_y1:roi_y2, roi_x1:roi_x2]
+    print(f"Detected Screen ROI: Y({roi_y1}:{roi_y2}), X({roi_x1}:{roi_x2})")
+    
+    cv2.imwrite(f"{debug_dir}/0b_Detected_ROI.png", roi)
+
+    # --- 1. ROI & THRESHOLDING ---
+    #roi_y1, roi_y2 = 100, 325
+    # roi_x1, roi_x2 = 225, 575
+    #roi = img[roi_y1:roi_y2, roi_x1:roi_x2]
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     
     thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
